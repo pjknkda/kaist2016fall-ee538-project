@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 echo 'Cloning Moses github repository (for tokenization scripts)...'
 git clone https://github.com/moses-smt/mosesdecoder.git
@@ -28,7 +28,8 @@ mkdir -p $orig $tmp $prep
 
 echo "Downloading data from ${URL}..."
 cd $orig
-http_proxy=fwdproxy:8080 https_proxy=fwdproxy:8080 wget "$URL"
+wget "$URL"
+#http_proxy=fwdproxy:8080 https_proxy=fwdproxy:8080 wget "$URL"
 
 if [ -f $GZ ]; then
     echo "Data successfully downloaded."

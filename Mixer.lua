@@ -24,6 +24,7 @@ local Mixer = torch.class("Mixer")
 
 function Mixer:__init(config, net, criterion, double)
     self.type = double and 'torch.DoubleTensor' or 'torch.CudaTensor'
+    self.config = config
     self.net = net:clone()
     self.criterion = criterion -- Reinforce Criterion
     -- build the predictors of the cumulative reward

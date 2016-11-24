@@ -14,11 +14,38 @@
 -- Trainer which calls FPROP/BPROP for each mini-batch, trains for the
 -- specified number of epochs and runs the evaluation.
 require 'math'
+require 'struct'
 require 'sys'
 require 'os'
 require 'torch'
 require 'xlua'
 local utils = paths.dofile('util.lua')
+
+local function load_word2vec(ncls_s, w2v_dim)
+    local weight = torch.Tensor(ncls_s, w2v_dim)
+
+    local fname = string.format('table.all.%d.bin', w2v_dim) 
+    local f = io.open(fname, 'rb')
+
+    local n = struct.unpack('<i', f:read(4))
+    local dim = struct.unpack('<i', f:read(4))
+
+    assert(ncls_s < n)
+    assert(w2v_dim == dim)
+
+    for i=1, ncls_s do
+        for j=1, w2v_dim do
+            weight[{i, j}] = struct.unpack('<f', f:read(4))
+        end
+    end
+
+    f:close()
+
+    print('Load word2vec table completed')
+
+    return weight
+end
+
 
 local Trainer = torch.class('Trainer')
 
@@ -48,7 +75,14 @@ function Trainer:train(dset)
     local nsamples_per_shard = torch.zeros(nshards)
     local coeff_rf, output_rf, reward_predictor_error
     local num_samples_rf, tot_cumreward_err, tot_reward
+
+    local n_source_tokens = self.model.config.n_source_tokens
+    local n_hidden = self.model.config.n_hidden
+    --local w2v = load_word2vec(n_source_tokens, n_hidden)
+
     for j = 1, nshards do
+        io.write('\nshards : ', j .. ' / ' ..  nshards)
+        io.flush()
         self.model:reset()
         local inputs, labels, batch_size, nbatches =
             dset:get_next_shard()
@@ -61,6 +95,25 @@ function Trainer:train(dset)
                     os.exit(0)
                 end
             end
+
+			-- (try 2) Conviert input_word_idx to input_word_vec
+--			local source = inputs[i][2] -- (batch_size * seq_length)
+--			local new_source = torch.Tensor(source:size(1), source:size(2), n_hidden):type(self.type) -- (batch_size * seq_length * nhid_c)
+--			for a = 1, source:size(1) do
+--				for b = 1, source:size(2) do
+--                    local word_idx = source[{a, b}]
+--                    for c = 1, n_hidden do
+--                        new_source[{a, b}] = w2v[{word_idx}]
+--                    end
+--				end
+--			end
+
+--            local new_input = {
+--                [1] = inputs[i][1],
+--                [2] = new_source,
+--                [3] = inputs[i][3]
+--            }
+
             -- this returns only the total XENT loss
             local loss_batch, nsamples_batch =
                self.model:train_one_batch(inputs[i], labels[i],

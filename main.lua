@@ -110,6 +110,7 @@ local test_data = DataSource(
      dct_source = dict_source})
 
 -- create and initialize the core net at a given time step
+config.model.n_source_tokens = dict_source.nwords
 config.model.eosIndex = dict_target.separatorIndex
 config.model.n_tokens = dict_target.nwords
 config.model.paddingIndex = dict_target.paddingIndex

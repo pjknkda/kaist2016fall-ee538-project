@@ -12,10 +12,35 @@
 --          Wojciech Zaremba <zaremba@cs.nyu.edu>
 --
 require('nngraph')
+require('struct')
 require('xlua')
 paths.dofile('ReinforceSampler.lua')
 local models = {}
 
+
+local function load_word2vec(ncls_s, w2v_dim)
+    local weight = torch.Tensor(ncls_s, w2v_dim)
+
+    local f = io.open(string.format('table.all.%d.bin', w2v_dim), 'rb')
+
+	local n = struct.unpack('<i', f:read(4))
+	local dim = struct.unpack('<i', f:read(4))
+
+	assert(ncls_s < n)
+	assert(w2v_dim == dim)
+
+	for i=1, ncls_s do
+		for j=1, w2v_dim do
+			weight[{i, j}] = struct.unpack('<f', f:read(4))
+		end
+	end
+
+	f:close()
+	
+	print('Load word2vec table completed')
+
+    return weight:cuda()
+end
 
 -- This function makes a single core element at a given time step.
 function models.makeNode(args)
@@ -61,16 +86,58 @@ function models.makeNode(args)
     local function conv_attn_aux(use_cell)
         -- embedding of the source
         local nhid_c = nhid
-        local src_lut = nn.LookupTable(ncls_s, nhid_c)
-        src_lut.weight:normal(0, initw)
-        local src_emb = src_lut(source):annotate{name = 'src_emb'}
 
-        local pos_lut = nn.LookupTable(ncls_p, nhid_c)
+        -- (try 1) Use pre-trained word2vec instead of lookup table
+--        local w2v_dim = 100
+
+--        local w2v_lut = nn.LookupTable(ncls_s, w2v_dim) -- produce (batch_size * seq_length * w2v_dim)
+        -- -- use pre-trained weights
+--        w2v_lut.weight = load_word2vec(ncls_s, w2v_dim)
+		-- -- fix weights
+--        w2v_lut.accGradParameters = function(self, input, gradOutput, scale) end
+--        local w2v_emb = w2v_lut(source):annotate{name = 'w2v_src_emb'}
+
+--        local src_cel = nn.Linear(w2v_dim, nhid_c)
+--        local src_emb_flat = src_cel(nn.View(-1, w2v_dim)(w2v_emb)):annotate{name = 'src_emb_flat'}
+--        local src_emb = nn.View(params.batch_size, -1, nhid_c)(src_emb_flat):annotate{name = 'src_emb'}
+
+
+		-- (try 2) Use pre-trained word2vec instead of lookup table
+        local src_i = nn.Identity()
+        --src_i.updateOutput = function(self, input) print(input) end
+        local src_emb = nn.Mul()(src_i(source)):annotate{name = 'src_emb'}
+
+        -- (try 3)
+--        local src_lut = nn.LookupTable(ncls_s, nhid_c) -- (batch_size * seq_length) -> (batch_size * seq_lenth * nhid_c) 
+--        src_lut.weight = load_word2vec(ncls_s, nhid_c)
+--        local src_emb = src_lut(source):annotate{name = 'src_emb'}
+        
+        -- (try 4)
+--        local src_lut = nn.LookupTable(ncls_s, nhid_c) -- (batch_size * seq_length) -> (batch_size * seq_lenth * nhid_c) 
+--        src_lut.weight = load_word2vec(ncls_s, nhid_c)
+--        src_lut.accGradParameters = function(self, input, gradOutput, scale) end
+--        local src_emb = src_lut(source):annotate{name = 'src_emb'}
+
+        -- (try 5)
+--        local w2v_dim = 100
+--        local src_lin = nn.Linear(w2v_dim, nhid_c)
+--        local src_emb_flat = src_lin(nn.View(-1, w2v_dim)(source))
+--        local src_emb = nn.View(params.batch_size, -1, nhid_c)(src_emb_flat)
+
+
+        -- (original)
+--        local src_lut = nn.LookupTable(ncls_s, nhid_c) -- (batch_size * seq_length) -> (batch_size * seq_lenth * nhid_c) 
+--        src_lut.weight:normal(0, initw)
+--        local src_emb = src_lut(source):annotate{name = 'src_emb'}
+
+        local pos_lut = nn.LookupTable(ncls_p, nhid_c) -- (batch_size * seq_length) -> (batch_size * seq_lenth * nhid_c)
         pos_lut.weight:normal(0, initw)
+        --pos_lut.updateOutput = function(self, input) print(input) end
         local pos_emb = pos_lut(cposition):annotate{name = 'pos_emb'}
 
-        local srcpos_emb = nn.CAddTable()(
-            {src_emb, pos_emb}):annotate{name = 'srcpos_emb'}
+        local srcpos_cat = nn.CAddTable()
+        --srcpos_cat.updateOutput = function(self, input) print(input) end
+        local srcpos_emb = srcpos_cat({src_emb, pos_emb}):annotate{name = 'srcpos_emb'}
 
         -- projection of previous hidden state onto source word space
         local lin_proj_hid = nn.Linear(nhid, nhid_c)

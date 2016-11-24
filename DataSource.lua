@@ -16,7 +16,37 @@ require 'torch'
 require 'paths'
 require 'math'
 require 'xlua'
+require 'struct'
 local tds = require('tds')
+
+local function load_word2vec(ncls_s, w2v_dim)
+    local weight = torch.Tensor(ncls_s, w2v_dim)
+
+    local fname = string.format('table.all.%d.bin', w2v_dim)
+    local f = io.open(fname, 'rb')
+
+    local n = struct.unpack('<i', f:read(4))
+    local dim = struct.unpack('<i', f:read(4))
+
+    assert(ncls_s < n)
+    assert(w2v_dim == dim)
+
+    for i=1, ncls_s do
+        for j=1, w2v_dim do
+            weight[{i, j}] = struct.unpack('<f', f:read(4))
+        end
+    end
+
+    f:close()
+
+    print('Load word2vec table completed')
+
+    return weight
+end
+
+local w2v_dim = 100
+--local w2v_dim = 256
+local w2v = load_word2vec(32010, w2v_dim)
 
 local DataSource  = torch.class('DataSource')
 
@@ -35,6 +65,20 @@ function DataSource:__init(config)
     self.padidx_source = self.sdict.paddingIndex
     self.all_sources = torch.load(paths.concat(self.root,
                                                self.dtype .. '.sources.th7'))
+    -- all_sources[length] = torch.Tensor(#sentences, length)
+    -- convert to word2vec -> [length] = torch.Tensor(#sentences, length, w2v_dim)
+    for sent_len, source in pairs(self.all_sources) do
+        local new_source = torch.Tensor(source:size(1), source:size(2), w2v_dim)
+        for i = 1, source:size(1) do
+            for j = 1, source:size(2) do
+                local word_idx = source[{i, j}]
+                new_source[{i, j}] = w2v[{word_idx, {}}]
+            end
+        end
+        self.all_sources[sent_len] = new_source
+    end
+    print('Converting ' .. self.dtype .. ' is done.')
+
     self.all_targets = torch.load(paths.concat(self.root,
                                                self.dtype .. '.targets.th7'))
     -- gather the shard ids
@@ -145,7 +189,8 @@ function DataSource:get_shard(snum)
     self.curr_source_len = self.curr_shard_id
     self.curr_source_shard = self.curr_source_shard or torch.LongTensor()
     self.curr_source_shard:resize(self.num_batches * self.seqlength,
-                                   self.batch_size, self.curr_source_len)
+--                                   self.batch_size, self.curr_source_len)
+                                   self.batch_size, self.curr_source_len, w2v_dim)
     self.curr_source_shard:fill(self.padidx_source)
     -- now load the various matrices with word ids
     local perm
@@ -170,7 +215,8 @@ function DataSource:get_shard(snum)
             local source_id = target_ids[1][2] -- source index
             local source = self.curr_source[source_id] -- source words
             for i = 1, curr_length do
-                self.curr_source_shard[{row + i - 1, col, {}}]:copy(source)
+--                self.curr_source_shard[{row + i - 1, col, {}}]:copy(source)
+                self.curr_source_shard[{row + i - 1, col, {}, {}}]:copy(source)
             end
 
             -- load the label matrix
@@ -201,7 +247,7 @@ function DataSource:get_shard_info_clm(cstgt, cslab, cssrc)
     local inputs = {}
     inputs.target = cstgt
     inputs.source = cssrc
-    inputs.cposition = torch.LongTensor():resizeAs(inputs.source)
+    inputs.cposition = torch.LongTensor():resize(cssrc:size(1), cssrc:size(2), cssrc:size(3))
     local winsz = inputs.cposition:size(3)
     for i = 1, winsz do
         inputs.cposition[{{}, {}, i}]:fill(i)
